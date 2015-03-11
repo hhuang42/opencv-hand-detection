@@ -38,9 +38,10 @@ using namespace std;
 using namespace cv;
 using namespace cv::gpu;
 
+
 typedef struct ctx {
 	VideoCapture	capture;	/* Capture */
-	CvVideoWriter	*writer;	/* File recording handle */
+	VideoWriter	writer;	/* File recording handle */
 
 	GpuMat	image;		/* Input image */
 	GpuMat	thr_image;	/* After filtering and thresholding */
@@ -50,9 +51,9 @@ typedef struct ctx {
 	vector<Point>		contour;	/* Hand contour */
 	vector<int>		hull;		/* Hand convex hull */
 
-	CvPoint		hand_center;
-	CvPoint		*fingers;	/* Detected fingers positions */
-	CvPoint		*defects;	/* Convexity defects depth points */
+	Point		hand_center;
+	Point		*fingers;	/* Detected fingers positions */
+	Point		*defects;	/* Convexity defects depth points */
 
 	Mat	kernel;	/* Kernel for morph operations */
 
@@ -63,7 +64,7 @@ typedef struct ctx {
 
 void init_capture(ImageInfo *ctx)
 {
-	ctx->capture.open(0);
+	ctx->capture.open(-1);
 	if (!ctx->capture.isOpened()) {
 		fprintf(stderr, "Error initializing capture\n");
 		exit(1);
@@ -72,25 +73,27 @@ void init_capture(ImageInfo *ctx)
 	Mat init_buffer;
 	ctx->capture.read(init_buffer);
 	ctx->image.upload(init_buffer);
+	//ctx->image=init_buffer;
 }
 
 void init_recording(ImageInfo *ctx)
 {
 	int fps, width, height;
 
-	fps = ctx->capture.get(CV_CAP_PROP_FPS);
+	//fps = ctx->capture.get(CV_CAP_PROP_FPS);
+	fps = 0;
 	width = ctx->capture.get(CV_CAP_PROP_FRAME_WIDTH);
 	height = ctx->capture.get(CV_CAP_PROP_FRAME_HEIGHT);
-
+    
 	if (fps < 0)
 		fps = 10;
 
-	ctx->writer = cvCreateVideoWriter(VIDEO_FILE, VIDEO_FORMAT, fps,
-					  cvSize(width, height), 1);
-
-	if (!ctx->writer) {
+	ctx->writer.open(VIDEO_FILE, VIDEO_FORMAT, fps,
+					  Size(width, height), 1);
+	fprintf(stderr, "%d %d\n",width, height);
+	if (!ctx->writer.isOpened()) {
 		fprintf(stderr, "Error initializing video writer\n");
-		exit(1);
+		//exit(1);
 	}
 }
 
@@ -108,30 +111,33 @@ void init_ctx(ImageInfo *ctx)
 	ctx->temp_image1.create(ctx->image.size(), CV_8UC1);
 	ctx->temp_image3.create(ctx->image.size(), CV_8UC3);
 	ctx->kernel = getStructuringElement(MORPH_RECT,Size(9, 9), Point(4, 4));
-	ctx->contour_st = cvCreateMemStorage(0);
-	ctx->hull_st = cvCreateMemStorage(0);
-	ctx->temp_st = cvCreateMemStorage(0);
-	ctx->fingers = new CvPoint[NUM_FINGERS + 1]();
-	ctx->defects = new CvPoint[NUM_DEFECTS]();
+//	ctx->contour_st = cvCreateMemStorage(0);
+//	ctx->hull_st = cvCreateMemStorage(0);
+//	ctx->temp_st = cvCreateMemStorage(0);
+	ctx->fingers = new Point[NUM_FINGERS + 1]();
+	ctx->defects = new Point[NUM_DEFECTS]();
 }
 
 void filter_and_threshold(ImageInfo *ctx)
 {
-
 	/* Soften image */
 	GaussianBlur(ctx->image, ctx->temp_image3, Size(11,11), 0, 0);
 	/* Remove some impulsive noise */
-	medianBlur(ctx->temp_image3, ctx->temp_image3, 11);
-
+	Mat temp_image3;
+	ctx->temp_image3.download(temp_image3);
+	medianBlur(temp_image3, temp_image3, 11);
+	ctx->temp_image3.upload(temp_image3);
 	cvtColor(ctx->temp_image3, ctx->temp_image3, CV_BGR2HSV);
 
 	/*
 	 * Apply threshold on HSV values to detect skin color
 	 */
-	inRange(ctx->temp_image3,
-		   Scalar(0, 55, 90, 255),
-		   Scalar(28, 175, 230, 255),
-		   ctx->thr_image);
+	ctx->temp_image3.download(temp_image3);
+	inRange(temp_image3,
+		   Scalar(100, 150, 0, 255),
+		   Scalar(150, 255, 230, 255),
+		   temp_image3);
+    ctx->thr_image.upload(temp_image3);
 
 	/* Apply morphological opening */
 	morphologyEx(ctx->thr_image, ctx->thr_image, MORPH_OPEN, ctx->kernel);
@@ -144,12 +150,11 @@ void find_contour(ImageInfo *ctx)
 	//CvSeq *contours, *tmp, *contour = NULL;
 	vector<vector<Point> > contours;
 	vector<vector<Point> >::iterator contour;
-
 	/* cvFindContours modifies input image, so make a copy */
-	ctx->thr_image.copyTo(ctx->temp_image1);
-	findContours(ctx->temp_image1, contours, CV_RETR_EXTERNAL,
+	Mat temp_image1;
+	ctx->thr_image.download(temp_image1);
+	findContours(temp_image1, contours, CV_RETR_EXTERNAL,
 		       CV_CHAIN_APPROX_SIMPLE, Point(0, 0));
-
 	/* Select contour having greatest area */
 	for (vector<vector<Point> >::iterator iter = contours.begin(),
 	     stop = contours.end(); iter != stop; ++iter) {
@@ -183,40 +188,36 @@ void find_convex_hull(ImageInfo *ctx)
 	if (!ctx->hull.empty()) {
 
 		/* Get convexity defects of contour w.r.t. the convex hull */
-		convexityDefects(ctx->contour, ctx->hull,
-					     defects);
-		if (!defects.empty()) {
+		//convexityDefects(ctx->contour, ctx->hull,
+		//			     defects);
+		if (true) {
 			/* Average depth points to get hand center */
-			for (i = 0; i < defects.size() && i < NUM_DEFECTS; ++i) {
-				x += ctx.contour[defects[i].[2]].x;
-				y += ctx.contour[defects[i].[2]].y;
+			for (i = 0; i < ctx->hull.size() ; ++i) {
+				x += ctx->contour[ctx->hull[i]].x;
+				y += ctx->contour[ctx->hull[i]].y;
 				
 				
-				//TODO: EVERYTHING BELOW THIS
 
-				ctx->defects[i] = cvPoint(defect_array[i].depth_point->x,
-							  defect_array[i].depth_point->y);
 			}
 
-			x /= defects->total;
-			y /= defects->total;
+			x /= ctx->hull.size();
+			y /= ctx->hull.size();
 
-			ctx->num_defects = defects->total;
-			ctx->hand_center = cvPoint(x, y);
+			//ctx->num_defects = defects.size();
+			ctx->hand_center = Point(x, y);
 
 			/* Compute hand radius as mean of distances of
 			   defects' depth point to hand center */
-			for (i = 0; i < defects->total; i++) {
-				int d = (x - defect_array[i].depth_point->x) *
-					(x - defect_array[i].depth_point->x) +
-					(y - defect_array[i].depth_point->y) *
-					(y - defect_array[i].depth_point->y);
-
-				dist += sqrt(d);
-			}
-
-			ctx->hand_radius = dist / defects->total;
-			free(defect_array);
+			//for (i = 0; i < contour.size(); i++) {
+		//		int d = (x - ctx->contour[i].x) *
+		//			(x - ctx->contour[i].x) +
+		//			(y - ctx->contour[i].y) *
+		//			(y - ctx->contour[i].y);
+//
+		//		dist += sqrt(d);
+		//	}
+//
+		//	ctx->hand_radius = dist / defects.size();
 		}
 	}
 }
@@ -225,19 +226,16 @@ void find_fingers(ImageInfo *ctx)
 {
 	int n;
 	int i;
-	CvPoint *points;
 	CvPoint max_point;
 	int dist1 = 0, dist2 = 0;
 
 	ctx->num_fingers = 0;
 
-	if (!ctx->contour || !ctx->hull)
+	if (ctx->contour.empty() || ctx->hull.empty())
 		return;
 
-	n = ctx->contour->total;
-	points = (CvPoint*) calloc(n, sizeof(CvPoint));
+	n = ctx->contour.size();
 
-	cvCvtSeqToArray(ctx->contour, points, CV_WHOLE_SEQ);
 
 	/*
 	 * Fingers are detected as points where the distance to the center
@@ -248,11 +246,11 @@ void find_fingers(ImageInfo *ctx)
 		int cx = ctx->hand_center.x;
 		int cy = ctx->hand_center.y;
 
-		dist = (cx - points[i].x) * (cx - points[i].x) +
-		    (cy - points[i].y) * (cy - points[i].y);
+		dist = (cx - ctx->contour[i].x) * (cx - ctx->contour[i].x) +
+		    (cy - ctx->contour[i].y) * (cy - ctx->contour[i].y);
 
 		if (dist < dist1 && dist1 > dist2 && max_point.x != 0
-		    && max_point.y < cvGetSize(ctx->image).height - 10) {
+		    && max_point.y < ctx->image.size().height - 10) {
 
 			ctx->fingers[ctx->num_fingers++] = max_point;
 			if (ctx->num_fingers >= NUM_FINGERS + 1)
@@ -261,43 +259,50 @@ void find_fingers(ImageInfo *ctx)
 
 		dist2 = dist1;
 		dist1 = dist;
-		max_point = points[i];
+		max_point = ctx->contour[i];
 	}
 
-	free(points);
 }
 
 void display(ImageInfo *ctx)
 {
 	int i;
+    Mat image;
+    Mat thr_image;
+    //image = ctx->image;
+    //thr_image = ctx->thr_image;
+    ctx->image.download(image);
+    ctx->thr_image.download(thr_image);
+	if (true) {
 
-	if (ctx->num_fingers == NUM_FINGERS) {
-
+        vector<vector<Point> > contours;
+        contours.push_back(ctx->contour);
+        
+        
+        
 #if defined(SHOW_HAND_CONTOUR)
-		cvDrawContours(ctx->image, ctx->contour, BLUE, GREEN, 0, 1,
-			       CV_AA, cvPoint(0, 0));
+		drawContours(image, contours, 0, BLUE);
 #endif
-		cvCircle(ctx->image, ctx->hand_center, 5, PURPLE, 1, CV_AA, 0);
-		cvCircle(ctx->image, ctx->hand_center, ctx->hand_radius,
-			 RED, 1, CV_AA, 0);
+		circle(image, ctx->hand_center, 5, PURPLE, 1, CV_AA, 0);
+//		circle(image, ctx->hand_center, ctx->hand_radius,
+//			 RED, 1, CV_AA, 0);
 
-		for (i = 0; i < ctx->num_fingers; i++) {
-
-			cvCircle(ctx->image, ctx->fingers[i], 10,
-				 GREEN, 3, CV_AA, 0);
-
-			cvLine(ctx->image, ctx->hand_center, ctx->fingers[i],
-			       YELLOW, 1, CV_AA, 0);
-		}
-
-		for (i = 0; i < ctx->num_defects; i++) {
-			cvCircle(ctx->image, ctx->defects[i], 2,
-				 GREY, 2, CV_AA, 0);
-		}
+	//	for (i = 0; i < ctx->num_fingers; i++) {
+//
+	//		circle(image, ctx->fingers[i], 10,
+	//			 GREEN, 3, CV_AA, 0);
+//
+	//		line(image, ctx->hand_center, ctx->fingers[i],
+	//		       YELLOW, 1, CV_AA, 0);
+	//	}
+//
+	//	for (i = 0; i < ctx->num_defects; i++) {
+	//		circle(image, ctx->defects[i], 2,
+	//			 GREY, 2, CV_AA, 0);
+	//	}
 	}
-
-	cvShowImage("output", ctx->image);
-	cvShowImage("thresholded", ctx->thr_image);
+	imshow("output", image);
+	imshow("thresholded",thr_image);
 }
 
 int main(int argc, char **argv)
@@ -309,17 +314,21 @@ int main(int argc, char **argv)
 	init_recording(&ctx);
 	init_windows();
 	init_ctx(&ctx);
+	Mat init_buffer;
 
 	do {
-		ctx.image = cvQueryFrame(ctx.capture);
-
+	
+	    ctx.capture.read(init_buffer);
+	    ctx.image.upload(init_buffer);
+	    //ctx.image=init_buffer;
 		filter_and_threshold(&ctx);
 		find_contour(&ctx);
 		find_convex_hull(&ctx);
-		find_fingers(&ctx);
-
+		//find_fingers(&ctx);
 		display(&ctx);
-		cvWriteFrame(ctx.writer, ctx.image);
+		ctx.image.download(init_buffer);
+		//init_buffer = ctx.image;
+		ctx.writer.write(init_buffer);
 
 		key = cvWaitKey(1);
 	} while (key != 'q');
