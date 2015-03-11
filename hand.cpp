@@ -126,6 +126,7 @@ void filter_and_threshold(ImageInfo *ctx)
 	Mat temp_image3;
 	ctx->temp_image3.download(temp_image3);
 	medianBlur(temp_image3, temp_image3, 11);
+	
 	ctx->temp_image3.upload(temp_image3);
 	cvtColor(ctx->temp_image3, ctx->temp_image3, CV_BGR2HSV);
 
@@ -315,6 +316,7 @@ int main(int argc, char **argv)
 	init_windows();
 	init_ctx(&ctx);
 	Mat init_buffer;
+	
 
 	do {
 	
@@ -326,9 +328,9 @@ int main(int argc, char **argv)
 		find_convex_hull(&ctx);
 		//find_fingers(&ctx);
 		display(&ctx);
-		ctx.image.download(init_buffer);
+		//ctx.image.download(init_buffer);
 		//init_buffer = ctx.image;
-		ctx.writer.write(init_buffer);
+		//ctx.writer.write(init_buffer);
 
 		key = cvWaitKey(1);
 	} while (key != 'q');
